@@ -1,0 +1,26 @@
+ARG imagename
+
+FROM --platform=$TARGETPLATFORM ${imagename}
+
+RUN set -x && \
+	yum -y install epel-release && \
+	yum -y groupinstall "Development Tools"  && \
+	yum -y install git \
+	wget \
+	jack-audio-connection-kit \
+	jack-audio-connection-kit-devel \
+	alsa-lib-devel \
+	libX11-devel \
+	libXext-devel \
+	libXinerama-devel \
+	libXrandr-devel \
+	libXcursor-devel \
+	freetype-devel \
+	libcurl-devel \
+	opus-devel && \
+	yum clean all
+
+RUN wget https://github.com/Kitware/CMake/archive/refs/tags/v3.15.6.tar.gz && tar xvf v3.15.6.tar.gz
+WORKDIR CMake-3.15.6
+RUN ./bootstrap && make && make install
+

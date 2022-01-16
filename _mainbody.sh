@@ -1,0 +1,26 @@
+#!/bin/bash
+
+source ${EXELOC}/_checkargs.sh
+
+if [ -z "$1" ]; then
+	COMPONENT=main
+else
+	COMPONENT="$1"
+fi
+
+set -x
+
+REGISTRY=localhost:5000
+DISTRO_IMAGE_NAME=${DISTRO}:${VERSION}
+NAME_SUFFIX=${DISTRO}-${PLATFORM}:${VERSION}
+
+FPM_NAME=fpm-${NAME_SUFFIX}
+FPM_TAG=${REGISTRY}/${FPM_NAME}
+FPM_CACHE_TAG=${REGISTRY}/cache/${FPM_NAME}
+
+SONOBUS_NAME=sonobus-${NAME_SUFFIX}
+
+BASE_NAME=base-${SONOBUS_NAME}
+BASE_TAG=${REGISTRY}/${BASE_NAME}
+BASE_CACHE_TAG=${REGISTRY}/cache/${BASE_NAME}
+

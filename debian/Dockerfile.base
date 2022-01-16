@@ -1,0 +1,29 @@
+ARG imagename
+
+FROM --platform=$TARGETPLATFORM ${imagename}
+
+ENV DEBIAN_FRONTEND noninteractive
+
+RUN set -x \
+	&& apt-get update \
+	&& apt-get install -y --no-install-recommends \
+        build-essential git \
+        libjack-jackd2-dev \
+	libopus0 \
+	libopus-dev \
+	opus-tools \
+	libasound2-dev \
+	libx11-dev \
+	libxext-dev \
+	libxinerama-dev \
+	libxrandr-dev \
+	libxcursor-dev \
+	libfreetype6-dev \
+	libcurl4-openssl-dev \
+        ca-certificates \
+	wget \
+	&& rm -rf /var/lib/apt/lists/*
+RUN wget https://github.com/Kitware/CMake/archive/refs/tags/v3.15.6.tar.gz && tar xvf v3.15.6.tar.gz
+WORKDIR CMake-3.15.6
+RUN ./bootstrap && make && make install
+
