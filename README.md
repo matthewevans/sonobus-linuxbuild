@@ -8,7 +8,7 @@ Ensure binfmt support
 ```
 sudo apt install binfmt-support
 sudo update-binfmts --enable
-``
+```
 
 ```
 modprobe binfmt_misc
