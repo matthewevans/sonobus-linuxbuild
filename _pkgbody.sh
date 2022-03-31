@@ -40,7 +40,8 @@ docker run --platform ${PLATFORM} --rm -it -w "/src/" -v "${PWD}/dist:/src/" ${F
 if [[ ! -z $(ls ./dist/*.deb 2>/dev/null) ]]
 then
 	echo "Adding deb to freight"
-	freight add -v -c $EXELOC/freight.conf ./dist/*.deb apt/stable/main
+	cd $EXELOC
+	freight add -v -c ./freight.conf ./debian/dist/*.deb apt/stable/main
 fi
 
 #freight cache -v -c $EXECLOC/freight.conf apt/stable
