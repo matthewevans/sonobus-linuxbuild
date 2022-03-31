@@ -14,4 +14,8 @@ EXELOC="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
 
 echo Current dir is $EXELOC
 cd $EXELOC/..
+rm -rf repo/apt
 freight cache -v -c ./freight.conf apt/stable
+cd repo
+git add apt freight
+
