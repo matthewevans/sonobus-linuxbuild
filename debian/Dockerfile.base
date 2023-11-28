@@ -8,6 +8,7 @@ RUN set -x \
 	&& apt-get update \
 	&& apt-get install -y --no-install-recommends \
         build-essential git \
+	libssl-dev \
         libjack-jackd2-dev \
 	libopus0 \
 	libopus-dev \
@@ -23,7 +24,7 @@ RUN set -x \
         ca-certificates \
 	wget \
 	&& rm -rf /var/lib/apt/lists/*
-RUN wget https://github.com/Kitware/CMake/archive/refs/tags/v3.15.6.tar.gz && tar xvf v3.15.6.tar.gz
-WORKDIR CMake-3.15.6
+RUN wget https://github.com/Kitware/CMake/archive/refs/tags/v3.22.6.tar.gz && tar xvf v3.22.6.tar.gz
+WORKDIR CMake-3.22.6
 RUN ./bootstrap && make && make install
 
