@@ -1,0 +1,96 @@
+# Full pipeline for CentOS/RHEL/Fedora: build → compile SonoBus → package .rpm
+
+ARG BASE_IMAGE=centos:8
+ARG CMAKE_VERSION=3.22.6
+
+# ── Stage 1: Build environment ────────────────────────────────────────────────
+FROM --platform=$TARGETPLATFORM ${BASE_IMAGE} AS build-env
+
+ARG CMAKE_VERSION
+
+RUN set -x \
+    && sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-* 2>/dev/null || true \
+    && sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-* 2>/dev/null || true \
+    && yum -y install epel-release \
+    && yum -y groupinstall "Development Tools" \
+    && yum -y install git wget \
+        jack-audio-connection-kit jack-audio-connection-kit-devel \
+        alsa-lib-devel libX11-devel libXext-devel libXinerama-devel \
+        libXrandr-devel libXcursor-devel freetype-devel libcurl-devel \
+        opus-devel openssl-devel \
+    && yum clean all
+
+RUN set -x \
+    && wget -q "https://github.com/Kitware/CMake/archive/refs/tags/v${CMAKE_VERSION}.tar.gz" \
+    && tar xf "v${CMAKE_VERSION}.tar.gz" \
+    && cd "CMake-${CMAKE_VERSION}" \
+    && ./bootstrap --parallel="$(nproc)" \
+    && make -j"$(nproc)" \
+    && make install \
+    && cd / \
+    && rm -rf "CMake-${CMAKE_VERSION}" "v${CMAKE_VERSION}.tar.gz"
+
+# ── Stage 2: SonoBus source + build ──────────────────────────────────────────
+FROM build-env AS sonobus
+
+ARG BRANCH=main
+ARG SONOBUS_SHA=unknown
+
+RUN git clone -b "${BRANCH}" --single-branch --depth 1 \
+        https://github.com/sonosaurus/sonobus.git /sonobus
+
+RUN grep -oE 'project\(SonoBus VERSION [0-9.]+' /sonobus/CMakeLists.txt \
+    | awk '{print $NF}' > /sonobus/.version
+
+RUN mkdir -p /dist/usr
+WORKDIR /sonobus/linux
+RUN set -x \
+    && ./build.sh \
+    && ./install.sh /dist/usr \
+    && strip --strip-unneeded /dist/usr/bin/sonobus
+
+# ── Stage 3: FPM packager ─────────────────────────────────────────────────────
+FROM fedora:latest AS packager
+
+RUN set -x \
+    && dnf install -y ruby-devel gcc make rpmdevtools \
+    && gem install fpm \
+    && dnf clean all
+
+# ── Stage 4: Package ──────────────────────────────────────────────────────────
+FROM packager AS package
+
+ARG ARCH=x86_64
+ARG ITERATION=0
+
+COPY --from=sonobus /sonobus/.version /tmp/.version
+COPY --from=sonobus /dist/usr /src/usr
+
+RUN set -x \
+    && VERSION=$(cat /tmp/.version) \
+    && mkdir -p /out \
+    && cd /src \
+    && fpm -s dir -f -t rpm \
+        -n sonobus \
+        -v "${VERSION}-${ITERATION}" \
+        -p "/out/sonobus_${VERSION}-${ITERATION}_${ARCH}.rpm" \
+        --url "https://www.sonobus.net" \
+        --license "GPL-3.0" \
+        --category "music" \
+        --maintainer "Matt Evans" \
+        --description "SonoBus is an easy to use application for streaming high-quality, low-latency peer-to-peer audio between devices over the internet or a local network." \
+        -d "opus" \
+        -d "jack-audio-connection-kit" \
+        -d "alsa-lib" \
+        -d "libX11" \
+        -d "libXext" \
+        -d "libXinerama" \
+        -d "libXrandr" \
+        -d "libXcursor" \
+        -d "freetype" \
+        -d "libcurl" \
+        usr
+
+# ── Stage 5: Export ───────────────────────────────────────────────────────────
+FROM scratch AS export
+COPY --from=package /out /

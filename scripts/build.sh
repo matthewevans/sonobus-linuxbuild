@@ -49,26 +49,18 @@ done
 [[ -z "$DISTRO" ]] && die "--distro is required"
 [[ -z "$ARCH" ]]   && die "--arch is required"
 
-# Resolve distro family
 case "$DISTRO" in
     debian|ubuntu)
-        PKG_TYPE="deb"
         BASE_IMAGE="${BASE_IMAGE:-ubuntu:jammy}"
-        DOCKERFILE_BUILD="$ROOT_DIR/docker/Dockerfile.build-deb"
-        DOCKERFILE_FPM="$ROOT_DIR/docker/Dockerfile.fpm-deb"
-        FPM_DEPS="-d libjack-jackd2-0|libjack0 -d libopus0 -d libasound2 -d libx11-6 -d libxext6 -d libxinerama1 -d libxrandr2 -d libxcursor1 -d libfreetype6 -d libcurl4"
+        DOCKERFILE="$ROOT_DIR/docker/Dockerfile.deb"
         ;;
     centos|rhel|fedora)
-        PKG_TYPE="rpm"
         BASE_IMAGE="${BASE_IMAGE:-centos:8}"
-        DOCKERFILE_BUILD="$ROOT_DIR/docker/Dockerfile.build-rpm"
-        DOCKERFILE_FPM="$ROOT_DIR/docker/Dockerfile.fpm-rpm"
-        FPM_DEPS="-d opus -d jack-audio-connection-kit -d alsa-lib -d libX11 -d libXext -d libXinerama -d libXrandr -d libXcursor -d freetype -d libcurl"
+        DOCKERFILE="$ROOT_DIR/docker/Dockerfile.rpm"
         ;;
     *) die "Unknown distro '$DISTRO'" ;;
 esac
 
-# Map Debian arch names to Docker platform strings
 case "$ARCH" in
     amd64) PLATFORM="linux/amd64" ;;
     arm64) PLATFORM="linux/arm64" ;;
@@ -76,87 +68,30 @@ case "$ARCH" in
     i386)  PLATFORM="linux/386" ;;
     *)     die "Unknown architecture '$ARCH'" ;;
 esac
-TAG="${DISTRO}-${ARCH}"
-BUILD_ENV_TAG="sonobus-build-env:${TAG}"
-BUILD_TAG="sonobus-build:${TAG}"
-FPM_TAG="sonobus-fpm:${TAG}"
-DIST_DIR="$ROOT_DIR/dist/${TAG}"
-OUTPUT_DIR="$ROOT_DIR/output"
 
-# --- Step 1: Build environment image ---
-echo "==> [1/5] Building build environment (${BUILD_ENV_TAG})"
+# Fetch upstream SHA to bust the sonobus stage cache only when source changes,
+# while keeping the slow build-env (CMake compile) stage cached.
+echo "==> Resolving upstream commit for branch '${BRANCH}'"
+SONOBUS_SHA=$(git ls-remote "$SONOBUS_REPO" "refs/heads/${BRANCH}" 2>/dev/null | cut -f1 || echo "unknown")
+echo "    SHA: ${SONOBUS_SHA}"
+
+OUTPUT_DIR="$ROOT_DIR/output"
+mkdir -p "$OUTPUT_DIR"
+
+echo "==> Building ${DISTRO}/${ARCH}"
 docker buildx build \
     --platform "$PLATFORM" \
     --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
     --build-arg "CMAKE_VERSION=${CMAKE_VERSION}" \
-    -t "$BUILD_ENV_TAG" \
-    --load \
-    -f "$DOCKERFILE_BUILD" \
-    "$ROOT_DIR/docker"
-
-# --- Step 2: Build SonoBus ---
-echo "==> [2/5] Building SonoBus (branch: ${BRANCH})"
-docker buildx build \
-    --no-cache \
-    --platform "$PLATFORM" \
-    --build-arg "BUILD_IMAGE=${BUILD_ENV_TAG}" \
     --build-arg "BRANCH=${BRANCH}" \
-    -t "$BUILD_TAG" \
-    --load \
-    -f "$ROOT_DIR/docker/Dockerfile.sonobus" \
+    --build-arg "SONOBUS_SHA=${SONOBUS_SHA}" \
+    --build-arg "ARCH=${ARCH}" \
+    --build-arg "ITERATION=${ITERATION}" \
+    --target export \
+    --output "type=local,dest=${OUTPUT_DIR}" \
+    -f "$DOCKERFILE" \
     "$ROOT_DIR/docker"
-
-# --- Step 3: Extract artifacts ---
-echo "==> [3/5] Extracting build artifacts"
-rm -rf "$DIST_DIR"
-mkdir -p "$DIST_DIR"
-
-CID=$(docker container create --platform "$PLATFORM" "$BUILD_TAG")
-docker container cp "$CID:/dist/." "$DIST_DIR/"
-docker container rm "$CID" > /dev/null
-docker image rm "$BUILD_TAG" > /dev/null 2>&1 || true
-
-[[ -f "$DIST_DIR/usr/bin/sonobus" ]] || die "Build failed — sonobus binary not found"
-
-# --- Step 4: Get version ---
-echo "==> [4/5] Resolving version"
-VERSION=$(curl -sf "https://raw.githubusercontent.com/sonosaurus/sonobus/${BRANCH}/CMakeLists.txt" \
-    | grep -oE '^project\(SonoBus VERSION [0-9]+\.[0-9]+\.[0-9]+' \
-    | awk '{print $NF}') || true
-[[ -z "$VERSION" ]] && die "Could not determine SonoBus version"
-echo "    ${PKG_NAME} ${VERSION}-${ITERATION} (${PKG_TYPE})"
-
-# --- Step 5: Package with fpm ---
-echo "==> [5/5] Packaging ${PKG_NAME}_${VERSION}-${ITERATION}_${TAG}.${PKG_TYPE}"
-docker buildx build \
-    --platform "$PLATFORM" \
-    --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
-    -t "$FPM_TAG" \
-    --load \
-    -f "$DOCKERFILE_FPM" \
-    "$ROOT_DIR/docker"
-
-mkdir -p "$OUTPUT_DIR"
-
-# shellcheck disable=SC2086
-docker run --rm \
-    --platform "$PLATFORM" \
-    -v "${DIST_DIR}:/src:ro" \
-    -v "${OUTPUT_DIR}:/output" \
-    -w /src \
-    "$FPM_TAG" \
-    fpm -s dir -f -t "$PKG_TYPE" \
-        -n "$PKG_NAME" \
-        -p "/output/${PKG_NAME}_${VERSION}-${ITERATION}_${TAG}.${PKG_TYPE}" \
-        -v "${VERSION}-${ITERATION}" \
-        --url "$PKG_URL" \
-        --license "$PKG_LICENSE" \
-        --category "$PKG_CATEGORY" \
-        --maintainer "$PKG_MAINTAINER" \
-        --description "$PKG_DESCRIPTION" \
-        $FPM_DEPS \
-        usr
 
 echo ""
 echo "==> Done! Package:"
-ls -lh "$OUTPUT_DIR/${PKG_NAME}_${VERSION}-${ITERATION}_${TAG}.${PKG_TYPE}"
+ls -lh "$OUTPUT_DIR"/*.deb "$OUTPUT_DIR"/*.rpm 2>/dev/null || true

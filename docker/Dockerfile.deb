@@ -1,0 +1,109 @@
+# Full pipeline for Debian/Ubuntu: build → compile SonoBus → package .deb
+#
+# Stages:
+#   build-env  — compiler toolchain + CMake
+#   sonobus    — compiled SonoBus installed to /dist
+#   packager   — ubuntu + fpm (cached separately from build-env)
+#   package    — produces .deb in /out
+#   export     — scratch image containing only the .deb (for --output type=local)
+
+ARG BASE_IMAGE=ubuntu:jammy
+ARG CMAKE_VERSION=3.22.6
+
+# ── Stage 1: Build environment ────────────────────────────────────────────────
+FROM --platform=$TARGETPLATFORM ${BASE_IMAGE} AS build-env
+
+ARG CMAKE_VERSION
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN set -x \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential git libssl-dev \
+        libjack-jackd2-dev libopus0 libopus-dev opus-tools \
+        libasound2-dev libx11-dev libxext-dev libxinerama-dev \
+        libxrandr-dev libxcursor-dev libfreetype6-dev \
+        libcurl4-openssl-dev ca-certificates wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN set -x \
+    && wget -q "https://github.com/Kitware/CMake/archive/refs/tags/v${CMAKE_VERSION}.tar.gz" \
+    && tar xf "v${CMAKE_VERSION}.tar.gz" \
+    && cd "CMake-${CMAKE_VERSION}" \
+    && ./bootstrap --parallel="$(nproc)" \
+    && make -j"$(nproc)" \
+    && make install \
+    && cd / \
+    && rm -rf "CMake-${CMAKE_VERSION}" "v${CMAKE_VERSION}.tar.gz"
+
+# ── Stage 2: SonoBus source + build ──────────────────────────────────────────
+FROM build-env AS sonobus
+
+ARG BRANCH=main
+# Passing the upstream git SHA as a build-arg busts the cache only when the
+# source changes, while keeping the slow build-env stage cached.
+ARG SONOBUS_SHA=unknown
+
+RUN git clone -b "${BRANCH}" --single-branch --depth 1 \
+        https://github.com/sonosaurus/sonobus.git /sonobus
+
+# Extract version before building so the package stage can read it
+RUN grep -oE 'project\(SonoBus VERSION [0-9.]+' /sonobus/CMakeLists.txt \
+    | awk '{print $NF}' > /sonobus/.version
+
+RUN mkdir -p /dist/usr
+WORKDIR /sonobus/linux
+RUN set -x \
+    && ./build.sh \
+    && ./install.sh /dist/usr \
+    && strip --strip-unneeded /dist/usr/bin/sonobus
+
+# ── Stage 3: FPM packager (cached independently of sonobus) ──────────────────
+FROM --platform=$TARGETPLATFORM ${BASE_IMAGE} AS packager
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN set -x \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ruby ruby-dev build-essential libffi-dev ca-certificates \
+    && gem install fpm \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Stage 4: Package ──────────────────────────────────────────────────────────
+FROM packager AS package
+
+ARG ARCH=amd64
+ARG ITERATION=0
+
+COPY --from=sonobus /sonobus/.version /tmp/.version
+COPY --from=sonobus /dist/usr /src/usr
+
+RUN set -x \
+    && VERSION=$(cat /tmp/.version) \
+    && mkdir -p /out \
+    && cd /src \
+    && fpm -s dir -f -t deb \
+        -n sonobus \
+        -v "${VERSION}-${ITERATION}" \
+        -p "/out/sonobus_${VERSION}-${ITERATION}_${ARCH}.deb" \
+        --url "https://www.sonobus.net" \
+        --license "GPL-3.0" \
+        --category "music" \
+        --maintainer "Matt Evans" \
+        --description "SonoBus is an easy to use application for streaming high-quality, low-latency peer-to-peer audio between devices over the internet or a local network." \
+        -d "libjack-jackd2-0|libjack0" \
+        -d "libopus0" \
+        -d "libasound2" \
+        -d "libx11-6" \
+        -d "libxext6" \
+        -d "libxinerama1" \
+        -d "libxrandr2" \
+        -d "libxcursor1" \
+        -d "libfreetype6" \
+        -d "libcurl4" \
+        usr
+
+# ── Stage 5: Export (scratch = only the .deb, nothing else) ──────────────────
+FROM scratch AS export
+COPY --from=package /out /

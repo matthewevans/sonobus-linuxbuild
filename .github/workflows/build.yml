@@ -30,10 +30,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { distro: debian, arch: amd64,  base_image: "ubuntu:jammy" }
-          - { distro: debian, arch: arm64,  base_image: "ubuntu:jammy" }
-          - { distro: debian, arch: i386,   base_image: "i386/ubuntu:bionic" }
-          - { distro: debian, arch: armhf,  base_image: "arm32v7/ubuntu:jammy" }
+          - { distro: debian, arch: amd64, platform: linux/amd64,   base_image: ubuntu:jammy        }
+          - { distro: debian, arch: arm64, platform: linux/arm64,   base_image: ubuntu:jammy        }
+          - { distro: debian, arch: i386,  platform: linux/386,     base_image: "i386/ubuntu:bionic" }
+          - { distro: debian, arch: armhf, platform: linux/arm/v7,  base_image: arm32v7/ubuntu:jammy }
 
     steps:
       - uses: actions/checkout@v4
@@ -45,15 +45,31 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and package
+      - name: Resolve upstream SHA (for cache invalidation)
+        id: sha
+        env:
+          BRANCH: ${{ inputs.branch || 'main' }}
         run: |
-          chmod +x scripts/build.sh
-          ./scripts/build.sh \
-            --distro ${{ matrix.distro }} \
-            --arch ${{ matrix.arch }} \
-            --branch ${{ inputs.branch || 'main' }} \
-            --iteration ${{ inputs.iteration || '0' }} \
-            --base-image ${{ matrix.base_image }}
+          SHA=$(git ls-remote https://github.com/sonosaurus/sonobus.git "refs/heads/${BRANCH}" | cut -f1)
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and export package
+        uses: docker/build-push-action@v6
+        with:
+          file: docker/Dockerfile.${{ matrix.distro == 'debian' && 'deb' || 'rpm' }}
+          context: docker
+          platforms: ${{ matrix.platform }}
+          target: export
+          outputs: type=local,dest=output
+          build-args: |
+            BASE_IMAGE=${{ matrix.base_image }}
+            CMAKE_VERSION=3.22.6
+            BRANCH=${{ inputs.branch || 'main' }}
+            SONOBUS_SHA=${{ steps.sha.outputs.sha }}
+            ARCH=${{ matrix.arch }}
+            ITERATION=${{ inputs.iteration || '0' }}
+          cache-from: type=gha,scope=${{ matrix.distro }}-${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.distro }}-${{ matrix.arch }},mode=max
 
       - uses: actions/upload-artifact@v4
         with:
@@ -95,14 +111,10 @@ jobs:
       - name: Clone packages repo
         run: |
           git clone --depth 1 --branch gh-pages \
-            "https://x-access-token:${{ secrets.PACKAGES_DEPLOY_TOKEN }}@github.com/${{ env.PACKAGES_REPO }}.git" \
+            "https://x-access-token:${{ secrets.PACKAGES_DEPLOY_TOKEN }}@github.com/sonosaurus/sonobus-packages.git" \
             packages-repo
-        env:
-          PACKAGES_REPO: sonosaurus/sonobus-packages
-
-      - name: Update repository
-        run: |
           git -C packages-repo config user.name "github-actions[bot]"
           git -C packages-repo config user.email "github-actions[bot]@users.noreply.github.com"
-          chmod +x scripts/update-repo.sh
-          ./scripts/update-repo.sh --repo-dir packages-repo --push
+
+      - name: Update and push repository
+        run: ./scripts/update-repo.sh --repo-dir packages-repo --push
