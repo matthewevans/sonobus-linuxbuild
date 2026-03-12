@@ -73,7 +73,7 @@ RUN set -x \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Stage 4: Package ──────────────────────────────────────────────────────────
-FROM packager AS package
+FROM --platform=$BUILDPLATFORM packager AS package
 
 ARG ARCH=amd64
 ARG ITERATION=0
