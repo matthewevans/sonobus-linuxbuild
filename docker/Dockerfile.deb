@@ -14,14 +14,25 @@ FROM --platform=$TARGETPLATFORM ${BASE_IMAGE} AS build-env
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Install cmake from Kitware's APT repo to guarantee a modern version (≥3.13)
+# regardless of the base image.  The default apt cmake on Ubuntu 18.04 (bionic)
+# is 3.10, which pre-dates the -B / --build -j flags used by sonobus/linux/build.sh.
 RUN set -x \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
-        build-essential git cmake libssl-dev \
+        build-essential git libssl-dev \
         libjack-jackd2-dev libopus0 libopus-dev opus-tools \
         libasound2-dev libx11-dev libxext-dev libxinerama-dev \
         libxrandr-dev libxcursor-dev libfreetype6-dev \
-        libcurl4-openssl-dev ca-certificates \
+        libcurl4-openssl-dev ca-certificates wget gpg \
+    && CODENAME=$(. /etc/os-release && echo "$VERSION_CODENAME") \
+    && wget -qO - https://apt.kitware.com/keys/kitware-archive-latest.asc \
+        | gpg --dearmor - > /usr/share/keyrings/kitware-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] \
+https://apt.kitware.com/ubuntu/ ${CODENAME} main" \
+        > /etc/apt/sources.list.d/kitware.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends cmake \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Stage 2: SonoBus source + build ──────────────────────────────────────────
