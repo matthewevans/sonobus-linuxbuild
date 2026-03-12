@@ -25,21 +25,21 @@ concurrency:
 jobs:
   build:
     name: ${{ matrix.distro }}/${{ matrix.arch }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runs_on }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { distro: debian, arch: amd64, platform: linux/amd64,   base_image: ubuntu:jammy        }
-          - { distro: debian, arch: arm64, platform: linux/arm64,   base_image: ubuntu:jammy        }
-          - { distro: debian, arch: i386,  platform: linux/386,     base_image: "i386/ubuntu:bionic" }
-          - { distro: debian, arch: armhf, platform: linux/arm/v7,  base_image: arm32v7/ubuntu:jammy }
+          - { distro: debian, arch: amd64, platform: linux/amd64,  runs_on: ubuntu-latest,    base_image: ubuntu:jammy         }
+          - { distro: debian, arch: arm64, platform: linux/arm64,  runs_on: ubuntu-24.04-arm, base_image: ubuntu:jammy         }
+          - { distro: debian, arch: i386,  platform: linux/386,    runs_on: ubuntu-latest,    base_image: "i386/ubuntu:bionic" }
+          - { distro: debian, arch: armhf, platform: linux/arm/v7, runs_on: ubuntu-latest,    base_image: arm32v7/ubuntu:jammy }
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up QEMU
-        if: matrix.arch != 'amd64'
+        if: matrix.arch != 'amd64' && matrix.arch != 'arm64'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
@@ -63,7 +63,6 @@ jobs:
           outputs: type=local,dest=output
           build-args: |
             BASE_IMAGE=${{ matrix.base_image }}
-            CMAKE_VERSION=3.22.6
             BRANCH=${{ inputs.branch || 'main' }}
             SONOBUS_SHA=${{ steps.sha.outputs.sha }}
             ARCH=${{ matrix.arch }}

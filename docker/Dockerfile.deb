@@ -8,33 +8,21 @@
 #   export     — scratch image containing only the .deb (for --output type=local)
 
 ARG BASE_IMAGE=ubuntu:jammy
-ARG CMAKE_VERSION=3.22.6
 
 # ── Stage 1: Build environment ────────────────────────────────────────────────
 FROM --platform=$TARGETPLATFORM ${BASE_IMAGE} AS build-env
 
-ARG CMAKE_VERSION
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN set -x \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
-        build-essential git libssl-dev \
+        build-essential git cmake libssl-dev \
         libjack-jackd2-dev libopus0 libopus-dev opus-tools \
         libasound2-dev libx11-dev libxext-dev libxinerama-dev \
         libxrandr-dev libxcursor-dev libfreetype6-dev \
-        libcurl4-openssl-dev ca-certificates wget \
+        libcurl4-openssl-dev ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
-RUN set -x \
-    && wget -q "https://github.com/Kitware/CMake/archive/refs/tags/v${CMAKE_VERSION}.tar.gz" \
-    && tar xf "v${CMAKE_VERSION}.tar.gz" \
-    && cd "CMake-${CMAKE_VERSION}" \
-    && ./bootstrap --parallel="$(nproc)" \
-    && make -j"$(nproc)" \
-    && make install \
-    && cd / \
-    && rm -rf "CMake-${CMAKE_VERSION}" "v${CMAKE_VERSION}.tar.gz"
 
 # ── Stage 2: SonoBus source + build ──────────────────────────────────────────
 FROM build-env AS sonobus
