@@ -1,60 +1,73 @@
+# SonoBus Linux Build
 
-Multiarch Setup
-===============
+Builds and packages [SonoBus](https://sonobus.net) for Linux (`.deb` and `.rpm`), and publishes an apt repository at [pkg.sonobus.net](https://pkg.sonobus.net).
 
-Ensure binfmt support
----------------------
-  
-```
-sudo apt install binfmt-support
-sudo update-binfmts --enable
-```
+## How it works
 
-```
-modprobe binfmt_misc
-```
+1. **`scripts/build.sh`** — Builds SonoBus in Docker (cross-arch via QEMU), then packages with [fpm](https://fpm.readthedocs.io/)
+2. **`scripts/update-repo.sh`** — Generates apt repo metadata and pushes to [sonobus-packages](https://github.com/sonosaurus/sonobus-packages)
+3. **GitHub Actions** — Primary build path. Trigger manually or push a `v*` tag to build + publish
 
-Create buildx builder with multiarch support
---------------------------------------------
+## GitHub Actions (primary)
 
-```
-# Create buildx container
-docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-#docker buildx create --name multiarch --driver docker-container --use
+Trigger a build from the Actions tab, or from CLI:
 
-# Create registry
-docker run -d -p 5000:5000 --restart=always --name registry registry:2
+```sh
+# Build only (no publish)
+gh workflow run build.yml -f branch=main
 
-# Create new multiarch + network builder
-docker buildx create --name multiarch-network --use --driver-opt network=host
-
-# Setup builder
-docker buildx inspect --bootstrapa
+# Build and publish to apt repo
+gh workflow run build.yml -f branch=main -f publish=true
 ```
 
-Building
---------------
+### Required secrets
+
+| Secret | Description |
+|--------|-------------|
+| `PACKAGES_DEPLOY_TOKEN` | GitHub PAT with write access to `sonosaurus/sonobus-packages` |
+| `GPG_PRIVATE_KEY` | (Optional) GPG private key for signing the apt repo |
+| `GPG_KEY_ID` | (Optional) GPG key email/ID |
+
+## Local builds (for testing)
+
+Requires Docker with buildx.
+
+```sh
+# One-time setup for cross-platform builds
+make setup
+
+# Build a single target
+make build DISTRO=debian ARCH=amd64
+
+# Build all Debian architectures
+make build-all-deb
+
+# Clean artifacts
+make clean
+```
+
+## Structure
 
 ```
-# Do build(s)
-cd debian
-./make.sh
-
-# Cache builds to repo
-cd ../tools
-./cache.sh
-
-# Post repo updates
-cd ../repo
-git add freight apt
-git commit -m "Added x.x.x builds"
-git push
+├── config.env                  # Package metadata and settings
+├── Makefile                    # Local build convenience targets
+├── docker/
+│   ├── Dockerfile.build-deb    # Debian/Ubuntu build environment
+│   ├── Dockerfile.build-rpm    # CentOS/Fedora build environment
+│   ├── Dockerfile.fpm-deb      # FPM for .deb packaging
+│   ├── Dockerfile.fpm-rpm      # FPM for .rpm packaging
+│   └── Dockerfile.sonobus      # SonoBus compilation stage
+├── scripts/
+│   ├── build.sh                # Build + package (single target)
+│   └── update-repo.sh          # Update apt repository
+└── .github/workflows/
+    └── build.yml               # CI/CD pipeline
 ```
 
-Pruning old images
-------------------
+## Adding a user's apt repository
 
+```sh
+curl -fsSL https://pkg.sonobus.net/apt/keyring.gpg | sudo gpg --dearmor -o /usr/share/keyrings/sonobus.gpg
+echo "deb [signed-by=/usr/share/keyrings/sonobus.gpg] https://pkg.sonobus.net/apt stable main" | sudo tee /etc/apt/sources.list.d/sonobus.list
+sudo apt update && sudo apt install sonobus
 ```
-docker image prune -a --filter "until=24h"
-```
-

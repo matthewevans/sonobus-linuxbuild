@@ -1,0 +1,108 @@
+name: Build and Publish SonoBus
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'SonoBus branch to build'
+        default: 'main'
+      iteration:
+        description: 'Package iteration (e.g. 0, 1)'
+        default: '0'
+      publish:
+        description: 'Publish to apt repo'
+        default: 'false'
+        type: choice
+        options: ['true', 'false']
+
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.distro }}/${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { distro: debian, arch: amd64,  base_image: "ubuntu:jammy" }
+          - { distro: debian, arch: arm64,  base_image: "ubuntu:jammy" }
+          - { distro: debian, arch: i386,   base_image: "i386/ubuntu:bionic" }
+          - { distro: debian, arch: armhf,  base_image: "arm32v7/ubuntu:jammy" }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: matrix.arch != 'amd64'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and package
+        run: |
+          chmod +x scripts/build.sh
+          ./scripts/build.sh \
+            --distro ${{ matrix.distro }} \
+            --arch ${{ matrix.arch }} \
+            --branch ${{ inputs.branch || 'main' }} \
+            --iteration ${{ inputs.iteration || '0' }} \
+            --base-image ${{ matrix.base_image }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-${{ matrix.distro }}-${{ matrix.arch }}
+          path: output/*.deb
+          retention-days: 30
+
+  publish:
+    name: Publish apt repo
+    needs: build
+    runs-on: ubuntu-latest
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: output
+          pattern: pkg-*
+          merge-multiple: true
+
+      - name: Install dpkg-dev
+        run: sudo apt-get update && sudo apt-get install -y dpkg-dev
+
+      - name: Import GPG key
+        if: env.HAS_GPG == 'true'
+        env:
+          HAS_GPG: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          echo "APT_GPG_KEY=${{ secrets.GPG_KEY_ID }}" >> "$GITHUB_ENV"
+
+      - name: Clone packages repo
+        run: |
+          git clone --depth 1 --branch gh-pages \
+            "https://x-access-token:${{ secrets.PACKAGES_DEPLOY_TOKEN }}@github.com/${{ env.PACKAGES_REPO }}.git" \
+            packages-repo
+        env:
+          PACKAGES_REPO: sonosaurus/sonobus-packages
+
+      - name: Update repository
+        run: |
+          git -C packages-repo config user.name "github-actions[bot]"
+          git -C packages-repo config user.email "github-actions[bot]@users.noreply.github.com"
+          chmod +x scripts/update-repo.sh
+          ./scripts/update-repo.sh --repo-dir packages-repo --push
