@@ -58,7 +58,10 @@ RUN set -x \
     && strip --strip-unneeded /dist/usr/bin/sonobus
 
 # ── Stage 3: FPM packager (cached independently of sonobus) ──────────────────
-FROM --platform=$TARGETPLATFORM ${BASE_IMAGE} AS packager
+# Always run on the build host's native platform: fpm only reads files and sets
+# metadata — it never executes target binaries, so it does not need to be i386.
+# This avoids the Ruby 2.5 / fpm ≥1.15 incompatibility on i386/ubuntu:bionic.
+FROM --platform=$BUILDPLATFORM ubuntu:jammy AS packager
 
 ENV DEBIAN_FRONTEND=noninteractive
 
